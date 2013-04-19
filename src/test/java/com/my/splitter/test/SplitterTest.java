@@ -3,10 +3,14 @@
  */
 package com.my.splitter.test;
 
-import static java.nio.file.StandardOpenOption.*;
-import static org.junit.Assert.*;
+import static java.nio.file.StandardOpenOption.CREATE;
+import static java.nio.file.StandardOpenOption.TRUNCATE_EXISTING;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 
 import java.io.BufferedWriter;
+import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.nio.charset.Charset;
@@ -15,17 +19,22 @@ import java.nio.file.Files;
 import java.nio.file.OpenOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
-import org.slf4j.LoggerFactory;
 import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.my.splitter.file.OperationResult;
 import com.my.splitter.file.Splitter;
+import com.my.splitter.file.Stitcher;
+import com.my.splitter.file.notify.Dummy;
+import com.my.splitter.file.notify.Information;
 
 /**
  * @author mike
@@ -36,9 +45,19 @@ public class SplitterTest {
 	private static final int CUNCK_SIZE = 50;
 	private static final int SIZE = 100;
 	private static final String TEMPFILE_ORIGIN = "tmp\\test.txt";
+	private static final String TEMPFILE_RESULT = "result.txt";
 	private static final String TEMPFOLDER = "tmp";
 	private static Splitter splitter = null;
 	private static final Logger log = LoggerFactory.getLogger(SplitterTest.class);
+	private static final List<Path> chunkList = new ArrayList<>();
+	
+	
+	public static class Informer implements com.my.splitter.file.notify.Notifier {
+		@Override
+		public void informProgress(Information info) {
+			chunkList.add(Paths.get(TEMPFOLDER).resolve(Paths.get(info.getFilename())));
+		}
+	}
 
 	/**
 	 * @throws java.lang.Exception
@@ -59,7 +78,7 @@ public class SplitterTest {
 			}
 			testFile.close();
 		}
-		splitter = new Splitter(path.toFile());
+		splitter = new Splitter(path.toFile(), new SplitterTest.Informer());
 	}
 
 	/**
@@ -76,17 +95,16 @@ public class SplitterTest {
 	}
 
 	/**
-	 * Test method for {@link com.my.splitter.file.Splitter#split(int)}.
+	 * Test method for {@link com.my.splitter.file.Splitter#split(long)}.
 	 */
 	@Test
 	public void testSplit() {
-		Path path = Paths.get(TEMPFILE_ORIGIN);
 		OperationResult or = splitter.split(CUNCK_SIZE);
 		assertTrue(or.isSuccess());
 	}
 	
 	/**
-	 * Test method for private method {@link com.my.splitter.file.Splitter#calculatePartsNumber(int, long)}.
+	 * Test method for private method {@link com.my.splitter.file.Splitter#calculatePartsNumber(long, long)}.
 	 */
 	@Test
 	public void testCalculatePartsNumber() {
@@ -113,12 +131,41 @@ public class SplitterTest {
 		assertEquals("moo.txt", s);
 		s = invoceRemoveExtention(null);
 	}
+	
+	@Test
+	public void testStitch() {
+		assertTrue(!chunkList.isEmpty());
+		Stitcher stitcher = new Stitcher(chunkList, new Dummy(), TEMPFILE_RESULT);
+		stitcher.stitch();
+		Path result = Paths.get(TEMPFOLDER).resolve(Paths.get(TEMPFILE_RESULT));
+		try {
+			byte[] origin = Files.readAllBytes(Paths.get(TEMPFILE_ORIGIN));
+			byte[] stitched = Files.readAllBytes(result);
+			assertTrue(binaryCompare(origin, stitched));
+		} catch (IOException e) {
+			log.error("Test stitch exception", e);
+			assertTrue(false);
+		}
+	}
+	
+	@Test
+	public void testSelf() {
+		byte[] one = {1,2,3,4,5};
+		byte[] two = {1,2,3,4,5};
+		byte[] three = {1,2,3,4,6};
+		byte[] four = {1,2,3,4,5,6};
+
+		assertTrue(binaryCompare(one, one));
+		assertTrue(binaryCompare(one, two));
+		assertFalse(binaryCompare(one, three));
+		assertFalse(binaryCompare(one, four));
+	}
 
 	private int invokeCalculatePartsNumber(int chunkSize, long fileSize) {
 		int result = 0;
 		Method method;
 		try {
-			method = splitter.getClass().getDeclaredMethod("calculatePartsNumber", int.class, long.class);
+			method = splitter.getClass().getDeclaredMethod("calculatePartsNumber", long.class, long.class);
 			method.setAccessible(true);
 			result = (Integer) method.invoke(splitter, chunkSize, fileSize);
 		} catch (NoSuchMethodException e) {
@@ -155,6 +202,19 @@ public class SplitterTest {
 			throw e.getCause();
 		}
 		return result;
+	}
+	
+	private boolean binaryCompare(byte[] one, byte[] two) {
+		if(one == two ) { return true;}
+		if(one.length == two.length) {
+			for(int i = 0, n = one.length; i < n; i++) {
+				if(one[i] != two[i]) {
+					return false;
+				}
+			}
+			return true;
+		}
+		return false;
 	}
 	
 	
